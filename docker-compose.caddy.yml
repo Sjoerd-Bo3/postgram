@@ -1,0 +1,48 @@
+# Optional overlay that puts Caddy with automatic HTTPS in front of the API
+# and UI. Run it together with the base file:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.caddy.yml up -d --build
+#
+# Requires POSTGRAM_DOMAIN in .env (a DNS name pointing at this host) and
+# inbound TCP 80 + 443 open on the host firewall / cloud NSG (443/udp too if
+# you want HTTP/3). The overlay pins the API and UI host ports back to
+# loopback — overriding any PORT_BIND_HOST/UI_BIND_HOST left over from a
+# plain-HTTP LAN setup — so nothing bypasses Caddy's TLS. Caddy reaches the
+# services over the Compose network. The `!override` tag needs Docker
+# Compose 2.24+.
+
+services:
+  mcp-server:
+    environment:
+      # The overlay knows the public origin, so OAuth setups only need
+      # OAUTH_ENABLED=true; set PUBLIC_BASE_URL in .env only to override.
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://${POSTGRAM_DOMAIN}}
+    ports: !override
+      - '127.0.0.1:${POSTGRAM_API_PORT:-3100}:3100'
+
+  postgram-ui:
+    ports: !override
+      - '127.0.0.1:${UI_PORT:-3000}:3000'
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    environment:
+      POSTGRAM_DOMAIN: ${POSTGRAM_DOMAIN:?Set POSTGRAM_DOMAIN in .env to the public DNS name for this host}
+    ports:
+      - '80:80'
+      - '443:443'
+      - '443:443/udp'
+    volumes:
+      - ./docker/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      mcp-server:
+        condition: service_healthy
+      postgram-ui:
+        condition: service_started
+
+volumes:
+  caddy_data:
+  caddy_config:

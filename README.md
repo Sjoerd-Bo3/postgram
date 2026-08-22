@@ -628,6 +628,7 @@ those values outside database backups and browser storage.
 | `PORT`                        | no          | `3100`  | HTTP/MCP server port                                                                                                           |
 | `POSTGRAM_API_PORT`           | no          | `3100`  | Docker Compose host port for the API/backend. The container listen port stays `3100`.                                          |
 | `UI_PORT`                     | no          | `3000`  | Docker Compose host port for the UI.                                                                                           |
+| `POSTGRAM_DOMAIN`             | Caddy overlay only |  | Public DNS name served by the optional Caddy HTTPS overlay (`docker-compose.caddy.yml`). Caddy provisions and renews its TLS certificate automatically. |
 | `OAUTH_ENABLED`               | no          | `false` | Enable OAuth authorization-code, PKCE, and Dynamic Client Registration routes for native remote MCP connectors.                 |
 | `PUBLIC_BASE_URL`             | conditional |         | Public HTTPS origin for OAuth metadata and callback URLs. Required when `OAUTH_ENABLED=true`. Example: `https://postgram.example.com`. |
 | `LOG_LEVEL`                   | no          | `info`  | pino log level                                                                                                                 |
@@ -822,6 +823,55 @@ The server exposes:
 - MCP endpoint at `http://127.0.0.1:3100/mcp`
 - Health endpoint at `http://127.0.0.1:3100/health`
 
+### Public HTTPS deployment (Caddy)
+
+For a single VM that serves other machines and remote MCP clients — an Azure
+VM, a VPS, or a homelab box with a public name — run the Caddy overlay on top
+of the normal Compose stack. Caddy terminates TLS with an automatic
+Let's Encrypt certificate and serves everything from one domain: `/api`,
+`/admin/api`, `/mcp`, `/oauth`, `/.well-known`, and `/health` route to the API
+container, everything else to the UI. The raw `:3100`/`:3000` ports stay bound
+to loopback, so nothing bypasses TLS.
+
+1. Point a DNS name at the host. On Azure, attach a static public IP to the VM
+   and create an A record for it — or use the VM's Azure DNS name label
+   (`<label>.<region>.cloudapp.azure.com`), which works with Let's Encrypt
+   too.
+2. Open inbound TCP 80 and 443 in the host firewall (on Azure, the network
+   security group; add UDP 443 if you want HTTP/3). Do not open 3100 or 3000.
+3. Configure `.env` on the host:
+
+   ```dotenv
+   POSTGRAM_DOMAIN=postgram.example.com
+   # Optional, for OAuth-based remote MCP connectors:
+   OAUTH_ENABLED=true
+   ```
+
+   The overlay defaults `PUBLIC_BASE_URL` to `https://${POSTGRAM_DOMAIN}`,
+   so enabling OAuth needs no further configuration; set `PUBLIC_BASE_URL`
+   explicitly only when the public origin differs from `POSTGRAM_DOMAIN`.
+
+   The overlay pins `:3100` and `:3000` back to loopback, overriding any
+   `PORT_BIND_HOST`/`UI_BIND_HOST` values left over from a plain-HTTP LAN
+   setup, so those do not need to be removed. It uses Compose's `!override`
+   tag, which needs Docker Compose 2.24+.
+
+4. Start the stack with both Compose files:
+
+   ```bash
+   docker compose -f docker-compose.yml -f docker-compose.caddy.yml up -d --build
+   ```
+
+5. Verify `https://postgram.example.com/health`, then complete the first-run
+   admin setup at `https://postgram.example.com/admin` as in the quick start.
+
+Remote machines then use `https://postgram.example.com` everywhere a local
+setup uses `http://127.0.0.1:3100`: `PGM_API_URL` for the CLI,
+`https://postgram.example.com/mcp` for MCP clients, and the same origin for
+the browser UI. The admin UI is protected by password plus mandatory MFA; to
+additionally restrict it by network, use the commented `remote_ip` allowlist
+block in [`docker/Caddyfile`](docker/Caddyfile).
+
 ## Authentication
 
 Create an API key from the Admin dashboard at `http://127.0.0.1:3000/admin`.
@@ -963,7 +1013,8 @@ PUBLIC_BASE_URL=https://postgram.example.com
 Add `${PUBLIC_BASE_URL}/mcp` as the connector URL in ChatGPT or Claude. The
 client discovers `/.well-known/oauth-protected-resource/mcp`, registers through
 `/oauth/register`, opens `/oauth/authorize`, and receives OAuth tokens from
-`/oauth/token`. The endpoint must be reachable over public HTTPS.
+`/oauth/token`. The endpoint must be reachable over public HTTPS — the
+[Caddy overlay](#public-https-deployment-caddy) provides exactly that.
 
 The authorize page asks for an existing Postgram API key once. Tokens issued
 from that approval inherit the API key's scopes, `client_id`, allowed entity
