@@ -163,8 +163,8 @@ enrichment and search will fail until the provider is available. See the
 [troubleshooting guide](https://postgram.dev/operations/troubleshooting/) for
 the longer path.
 
-For access from ChatGPT, Claude, or another remote MCP client, put Postgram
-behind HTTPS, enable OAuth, and follow the
+For access from ChatGPT, Claude, GitHub Copilot, or another remote MCP
+client, put Postgram behind HTTPS, enable OAuth, and follow the
 [MCP integration guide](https://postgram.dev/guides/mcp-integration/). Do not
 publish the loopback development ports directly to the internet.
 
@@ -971,6 +971,80 @@ types, and allowed visibility. If the source API key is revoked, OAuth access
 and refresh tokens derived from it stop working. Existing `Authorization:
 Bearer <api-key>` clients and `/mcp?apiKey=...` keep working unchanged.
 
+### GitHub Copilot (VS Code and Copilot CLI)
+
+Copilot's MCP support consumes the same Streamable HTTP endpoint. Both clients
+work with a static bearer API key, and both can use the OAuth flow described
+above when `OAUTH_ENABLED=true` and `PUBLIC_BASE_URL` are set. The legacy
+`gh copilot` extension for the GitHub CLI does not support MCP; use Copilot
+Chat agent mode in VS Code (1.101+) or the standalone `copilot` CLI.
+
+For VS Code, add the server to `.vscode/mcp.json` (or run **MCP: Add Server**
+from the command palette). An input variable keeps the API key out of the
+committed file — VS Code prompts once and stores the value securely:
+
+```json
+{
+  "inputs": [
+    {
+      "type": "promptString",
+      "id": "postgram-api-key",
+      "description": "Postgram API key",
+      "password": true
+    }
+  ],
+  "servers": {
+    "postgram": {
+      "type": "http",
+      "url": "http://127.0.0.1:3100/mcp",
+      "headers": {
+        "Authorization": "Bearer ${input:postgram-api-key}"
+      }
+    }
+  }
+}
+```
+
+Against an OAuth-enabled deployment, omit `headers` and point `url` at
+`${PUBLIC_BASE_URL}/mcp` — VS Code discovers the protected-resource metadata
+from the 401 response, registers through `/oauth/register`, and opens the
+authorize page in a browser.
+
+For Copilot CLI, add the server to `~/.copilot/mcp-config.json` (or use the
+interactive `/mcp add` command inside `copilot`). Note the different root key
+(`mcpServers`, not `servers`) and the `tools` allowlist:
+
+```json
+{
+  "mcpServers": {
+    "postgram": {
+      "type": "http",
+      "url": "http://127.0.0.1:3100/mcp",
+      "headers": {
+        "Authorization": "Bearer ${POSTGRAM_API_KEY}"
+      },
+      "tools": ["*"]
+    }
+  }
+}
+```
+
+`${POSTGRAM_API_KEY}` is read from the environment when the CLI starts.
+Copilot CLI also loads project-level configuration from `.mcp.json` or
+`.github/mcp.json` after you confirm folder trust, which suits team setups.
+Replace `"tools": ["*"]` with an explicit list such as
+`["search", "recall", "store", "task_list"]` to narrow what the agent may
+call. Against an OAuth-enabled deployment, Copilot CLI can omit `headers`
+too — it registers through `/oauth/register` via dynamic client registration.
+
+Header authentication works over plain HTTP for localhost development; the
+OAuth path requires the endpoint to be reachable over public HTTPS, as with
+the connectors above. To make Copilot use Postgram proactively, copy
+[`templates/AGENTS.md`](templates/AGENTS.md) (or
+[`templates/AGENTS.coding.md`](templates/AGENTS.coding.md) for coding work)
+into your project's `AGENTS.md` — VS Code agent mode and Copilot CLI both
+read it.
+
 ## CLI (`pgm`)
 
 ### Install from npm
@@ -1344,6 +1418,13 @@ the MCP tools to persist and recall knowledge without being asked.
 For coding agents that should avoid broad knowledge-work behavior, use
 [`templates/AGENTS.coding.md`](templates/AGENTS.coding.md) or [`templates/CLAUDE.coding.md`](templates/CLAUDE.coding.md). It narrows Postgram
 usage to session-context memory and durable development memory only.
+
+The `AGENTS.md` templates work with any agent that reads `AGENTS.md` —
+including GitHub Copilot in VS Code, Copilot CLI, Codex, and Cursor. MCP
+clients prefix tool names differently (Claude Code uses
+`mcp__postgram__search`, VS Code Copilot uses `mcp_postgram_search`), so the
+templates open with a note telling the agent to map the examples onto the
+Postgram tool names visible in its own environment.
 
 ## Releases & CI
 
