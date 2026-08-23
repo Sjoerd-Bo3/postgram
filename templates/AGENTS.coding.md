@@ -1,12 +1,19 @@
 ## Persistent Development Memory (Postgram)
 
-You have a connected Postgram memory store via MCP (`mcp__postgram__*` tools).
-For coding work, use it only for development continuity:
+You have a connected Postgram memory store via MCP. For coding work, use it
+only for development continuity:
 
 - session-context memory for active work, resumability, hypotheses, and next
   steps
 - durable memory for stable decisions, constraints, root causes, and completed
   outcomes
+
+Tool examples below use the `mcp__postgram__` prefix. The real prefix depends
+on your MCP client and the configured server name: Claude Code exposes
+`mcp__postgram__search`, VS Code Copilot exposes `mcp_postgram_search`, and
+other clients qualify tools by server name. Map the examples onto the Postgram
+tools visible in your environment (`store`, `search`, `recall`, `link`, and so
+on).
 
 Do not use Postgram as a general knowledge-work system during coding sessions.
 Avoid broad document/person/task exploration unless the user explicitly asks for

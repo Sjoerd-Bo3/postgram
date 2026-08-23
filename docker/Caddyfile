@@ -1,0 +1,30 @@
+# Caddy reverse proxy for a public HTTPS Postgram deployment. Used by
+# docker-compose.caddy.yml. Set POSTGRAM_DOMAIN in .env to a DNS name that
+# resolves to this host; Caddy obtains and renews the TLS certificate
+# automatically (certificates persist in the caddy_data volume).
+
+{$POSTGRAM_DOMAIN} {
+	# Optional hardening: serve the admin surface only to trusted networks.
+	# Uncomment and replace the range with your own (for example a Tailscale
+	# or office range). handle blocks match in source order, so this block
+	# must stay above the @api handle below.
+	#
+	# @admin path /admin /admin/*
+	# handle @admin {
+	# 	@untrusted not remote_ip 100.64.0.0/10
+	# 	respond @untrusted 403
+	# 	reverse_proxy /admin/api/* mcp-server:3100
+	# 	reverse_proxy postgram-ui:3000
+	# }
+
+	# API surface: REST, admin API, MCP, OAuth + metadata, health.
+	@api path /api/* /admin/api/* /mcp /mcp/* /oauth/* /.well-known/* /health
+	handle @api {
+		reverse_proxy mcp-server:3100
+	}
+
+	# Everything else is the browser UI, including the /admin pages.
+	handle {
+		reverse_proxy postgram-ui:3000
+	}
+}

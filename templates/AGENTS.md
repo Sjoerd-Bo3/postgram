@@ -1,8 +1,15 @@
 ## Persistent Memory (Postgram)
 
-You have a connected personal knowledge store via MCP (`mcp__postgram__*` tools).
+You have a connected personal knowledge store via the Postgram MCP server.
 Use it proactively — it is what makes you useful across sessions instead of
 starting from scratch every time.
+
+Tool examples below use the `mcp__postgram__` prefix. The real prefix depends
+on your MCP client and the configured server name: Claude Code exposes
+`mcp__postgram__search`, VS Code Copilot exposes `mcp_postgram_search`, and
+other clients qualify tools by server name. Map the examples onto the Postgram
+tools visible in your environment (`store`, `search`, `recall`, `link`, and so
+on).
 
 ### When to search (do this first, before asking the user)
 

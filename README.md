@@ -163,8 +163,8 @@ enrichment and search will fail until the provider is available. See the
 [troubleshooting guide](https://postgram.dev/operations/troubleshooting/) for
 the longer path.
 
-For access from ChatGPT, Claude, or another remote MCP client, put Postgram
-behind HTTPS, enable OAuth, and follow the
+For access from ChatGPT, Claude, GitHub Copilot, or another remote MCP
+client, put Postgram behind HTTPS, enable OAuth, and follow the
 [MCP integration guide](https://postgram.dev/guides/mcp-integration/). Do not
 publish the loopback development ports directly to the internet.
 
@@ -628,6 +628,7 @@ those values outside database backups and browser storage.
 | `PORT`                        | no          | `3100`  | HTTP/MCP server port                                                                                                           |
 | `POSTGRAM_API_PORT`           | no          | `3100`  | Docker Compose host port for the API/backend. The container listen port stays `3100`.                                          |
 | `UI_PORT`                     | no          | `3000`  | Docker Compose host port for the UI.                                                                                           |
+| `POSTGRAM_DOMAIN`             | Caddy overlay only |  | Public DNS name served by the optional Caddy HTTPS overlay (`docker-compose.caddy.yml`). Caddy provisions and renews its TLS certificate automatically. |
 | `OAUTH_ENABLED`               | no          | `false` | Enable OAuth authorization-code, PKCE, and Dynamic Client Registration routes for native remote MCP connectors.                 |
 | `PUBLIC_BASE_URL`             | conditional |         | Public HTTPS origin for OAuth metadata and callback URLs. Required when `OAUTH_ENABLED=true`. Example: `https://postgram.example.com`. |
 | `LOG_LEVEL`                   | no          | `info`  | pino log level                                                                                                                 |
@@ -822,6 +823,55 @@ The server exposes:
 - MCP endpoint at `http://127.0.0.1:3100/mcp`
 - Health endpoint at `http://127.0.0.1:3100/health`
 
+### Public HTTPS deployment (Caddy)
+
+For a single VM that serves other machines and remote MCP clients — an Azure
+VM, a VPS, or a homelab box with a public name — run the Caddy overlay on top
+of the normal Compose stack. Caddy terminates TLS with an automatic
+Let's Encrypt certificate and serves everything from one domain: `/api`,
+`/admin/api`, `/mcp`, `/oauth`, `/.well-known`, and `/health` route to the API
+container, everything else to the UI. The raw `:3100`/`:3000` ports stay bound
+to loopback, so nothing bypasses TLS.
+
+1. Point a DNS name at the host. On Azure, attach a static public IP to the VM
+   and create an A record for it — or use the VM's Azure DNS name label
+   (`<label>.<region>.cloudapp.azure.com`), which works with Let's Encrypt
+   too.
+2. Open inbound TCP 80 and 443 in the host firewall (on Azure, the network
+   security group; add UDP 443 if you want HTTP/3). Do not open 3100 or 3000.
+3. Configure `.env` on the host:
+
+   ```dotenv
+   POSTGRAM_DOMAIN=postgram.example.com
+   # Optional, for OAuth-based remote MCP connectors:
+   OAUTH_ENABLED=true
+   ```
+
+   The overlay defaults `PUBLIC_BASE_URL` to `https://${POSTGRAM_DOMAIN}`,
+   so enabling OAuth needs no further configuration; set `PUBLIC_BASE_URL`
+   explicitly only when the public origin differs from `POSTGRAM_DOMAIN`.
+
+   The overlay pins `:3100` and `:3000` back to loopback, overriding any
+   `PORT_BIND_HOST`/`UI_BIND_HOST` values left over from a plain-HTTP LAN
+   setup, so those do not need to be removed. It uses Compose's `!override`
+   tag, which needs Docker Compose 2.24+.
+
+4. Start the stack with both Compose files:
+
+   ```bash
+   docker compose -f docker-compose.yml -f docker-compose.caddy.yml up -d --build
+   ```
+
+5. Verify `https://postgram.example.com/health`, then complete the first-run
+   admin setup at `https://postgram.example.com/admin` as in the quick start.
+
+Remote machines then use `https://postgram.example.com` everywhere a local
+setup uses `http://127.0.0.1:3100`: `PGM_API_URL` for the CLI,
+`https://postgram.example.com/mcp` for MCP clients, and the same origin for
+the browser UI. The admin UI is protected by password plus mandatory MFA; to
+additionally restrict it by network, use the commented `remote_ip` allowlist
+block in [`docker/Caddyfile`](docker/Caddyfile).
+
 ## Authentication
 
 Create an API key from the Admin dashboard at `http://127.0.0.1:3000/admin`.
@@ -963,13 +1013,88 @@ PUBLIC_BASE_URL=https://postgram.example.com
 Add `${PUBLIC_BASE_URL}/mcp` as the connector URL in ChatGPT or Claude. The
 client discovers `/.well-known/oauth-protected-resource/mcp`, registers through
 `/oauth/register`, opens `/oauth/authorize`, and receives OAuth tokens from
-`/oauth/token`. The endpoint must be reachable over public HTTPS.
+`/oauth/token`. The endpoint must be reachable over public HTTPS — the
+[Caddy overlay](#public-https-deployment-caddy) provides exactly that.
 
 The authorize page asks for an existing Postgram API key once. Tokens issued
 from that approval inherit the API key's scopes, `client_id`, allowed entity
 types, and allowed visibility. If the source API key is revoked, OAuth access
 and refresh tokens derived from it stop working. Existing `Authorization:
 Bearer <api-key>` clients and `/mcp?apiKey=...` keep working unchanged.
+
+### GitHub Copilot (VS Code and Copilot CLI)
+
+Copilot's MCP support consumes the same Streamable HTTP endpoint. Both clients
+work with a static bearer API key, and both can use the OAuth flow described
+above when `OAUTH_ENABLED=true` and `PUBLIC_BASE_URL` are set. The legacy
+`gh copilot` extension for the GitHub CLI does not support MCP; use Copilot
+Chat agent mode in VS Code (1.101+) or the standalone `copilot` CLI.
+
+For VS Code, add the server to `.vscode/mcp.json` (or run **MCP: Add Server**
+from the command palette). An input variable keeps the API key out of the
+committed file — VS Code prompts once and stores the value securely:
+
+```json
+{
+  "inputs": [
+    {
+      "type": "promptString",
+      "id": "postgram-api-key",
+      "description": "Postgram API key",
+      "password": true
+    }
+  ],
+  "servers": {
+    "postgram": {
+      "type": "http",
+      "url": "http://127.0.0.1:3100/mcp",
+      "headers": {
+        "Authorization": "Bearer ${input:postgram-api-key}"
+      }
+    }
+  }
+}
+```
+
+Against an OAuth-enabled deployment, omit `headers` and point `url` at
+`${PUBLIC_BASE_URL}/mcp` — VS Code discovers the protected-resource metadata
+from the 401 response, registers through `/oauth/register`, and opens the
+authorize page in a browser.
+
+For Copilot CLI, add the server to `~/.copilot/mcp-config.json` (or use the
+interactive `/mcp add` command inside `copilot`). Note the different root key
+(`mcpServers`, not `servers`) and the `tools` allowlist:
+
+```json
+{
+  "mcpServers": {
+    "postgram": {
+      "type": "http",
+      "url": "http://127.0.0.1:3100/mcp",
+      "headers": {
+        "Authorization": "Bearer ${POSTGRAM_API_KEY}"
+      },
+      "tools": ["*"]
+    }
+  }
+}
+```
+
+`${POSTGRAM_API_KEY}` is read from the environment when the CLI starts.
+Copilot CLI also loads project-level configuration from `.mcp.json` or
+`.github/mcp.json` after you confirm folder trust, which suits team setups.
+Replace `"tools": ["*"]` with an explicit list such as
+`["search", "recall", "store", "task_list"]` to narrow what the agent may
+call. Against an OAuth-enabled deployment, Copilot CLI can omit `headers`
+too — it registers through `/oauth/register` via dynamic client registration.
+
+Header authentication works over plain HTTP for localhost development; the
+OAuth path requires the endpoint to be reachable over public HTTPS, as with
+the connectors above. To make Copilot use Postgram proactively, copy
+[`templates/AGENTS.md`](templates/AGENTS.md) (or
+[`templates/AGENTS.coding.md`](templates/AGENTS.coding.md) for coding work)
+into your project's `AGENTS.md` — VS Code agent mode and Copilot CLI both
+read it.
 
 ## CLI (`pgm`)
 
@@ -1344,6 +1469,13 @@ the MCP tools to persist and recall knowledge without being asked.
 For coding agents that should avoid broad knowledge-work behavior, use
 [`templates/AGENTS.coding.md`](templates/AGENTS.coding.md) or [`templates/CLAUDE.coding.md`](templates/CLAUDE.coding.md). It narrows Postgram
 usage to session-context memory and durable development memory only.
+
+The `AGENTS.md` templates work with any agent that reads `AGENTS.md` —
+including GitHub Copilot in VS Code, Copilot CLI, Codex, and Cursor. MCP
+clients prefix tool names differently (Claude Code uses
+`mcp__postgram__search`, VS Code Copilot uses `mcp_postgram_search`), so the
+templates open with a note telling the agent to map the examples onto the
+Postgram tool names visible in its own environment.
 
 ## Releases & CI
 
